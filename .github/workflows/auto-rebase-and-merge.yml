@@ -26,7 +26,7 @@ jobs:
           fetch-depth: 0  # нужно, чтобы история коммитов была полной
 
       - name: Automatic Rebase
-        uses: cirrus-actions/rebase@v1.8
+        uses: cirrus-actions/rebase@1.8
         with:
           # Если комментарий содержит /autosquash или /rebase-autosquash — включаем автосквош
           autosquash: ${{ contains(github.event.comment.body, '/autosquash') || contains(github.event.comment.body, '/rebase-autosquash') }}
