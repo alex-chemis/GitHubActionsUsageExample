@@ -99,6 +99,7 @@ jobs:
             const notCompleted = relevantCheckRuns.some(check =>
               check.status !== 'completed'
             );
+            
             if (notCompleted) {
               core.setFailed("Some required checks are still running. Please wait.");
               await removeLabel();
@@ -114,6 +115,9 @@ jobs:
             });
 
             if (pr.mergeable_state !== "clean") {
+              console.log(`mergeable: ${pr.mergeable}`);
+              console.log(`mergeable_state: ${pr.mergeable_state}`);
+              console.log(`mergeable_reason: ${pr.mergeable_reason}`);
               core.setFailed(`Merge conflict detected! PR #${pullNumber} requires manual resolution.`);
               await removeLabel();
               return;
