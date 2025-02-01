@@ -69,22 +69,18 @@ jobs:
 
             console.log(`Checking CI/CD status for PR #${pullNumber}...`);
 
-            // 1. Получаем все check_runs
             const { data: checks } = await github.rest.checks.listForRef({
               owner: context.repo.owner,
               repo: context.repo.repo,
               ref: context.payload.pull_request.head.sha,
             });
 
-            // 2. Указываем список "обязательных" проверок
-            const requiredChecks = ['build', 'test']; // Пример! Подставьте свои
+            const requiredChecks = ['build', 'test'];
 
-            // 3. Фильтруем из всех только нужные
             const relevantCheckRuns = checks.check_runs.filter(check => 
               requiredChecks.includes(check.name)
             );
 
-            // 4. Проверяем, не упали ли наши обязательные проверки
             const failedRequiredCheck = relevantCheckRuns.some(check => 
               check.conclusion === 'failure'
             );
@@ -95,7 +91,6 @@ jobs:
               return;
             }
 
-            // (Опционально) Проверяем, что все обязательные проверки завершились (нет in_progress)
             const notCompleted = relevantCheckRuns.some(check =>
               check.status !== 'completed'
             );
@@ -114,10 +109,13 @@ jobs:
               pull_number: pullNumber
             });
 
-            if (pr.mergeable_state !== "clean") {
-              console.log(`mergeable: ${pr.mergeable}`);
-              console.log(`mergeable_state: ${pr.mergeable_state}`);
-              console.log(`mergeable_reason: ${pr.mergeable_reason}`);
+            if (!pr.mergeable) {
+              core.setFailed(`GitHub says PR #${pullNumber} is not mergeable. Possible conflicts?`);
+              await removeLabel();
+              return;
+            }
+            
+            if (pr.mergeable_state === "dirty") {
               core.setFailed(`Merge conflict detected! PR #${pullNumber} requires manual resolution.`);
               await removeLabel();
               return;
