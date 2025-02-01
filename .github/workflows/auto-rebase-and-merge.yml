@@ -7,14 +7,14 @@ on:
 permissions:
   pull-requests: write
   contents: write
-  checks: read  # Чтобы проверять CI/CD статусы
-  repository-projects: read  # Чтобы получать список Collaborators
+  checks: read
+  repository-projects: read
 
 jobs:
   rebase-and-merge:
-    name: Secure Rebase and Merge PR
     if: github.event.label.name == 'rebase-and-merge'
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -22,52 +22,34 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      - name: Automatic Rebase
-        uses: cirrus-actions/rebase@1.8
-        with:
-          autosquash: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create merge commit with security checks
+      - name: Security Checks (collaborator, CI статус, mergeable)
+        id: security-checks
         uses: actions/github-script@v6
         with:
           script: |
             const pullNumber = context.payload.pull_request.number;
             const prUser = context.payload.pull_request.user.login;
-            const labelName = 'rebase-and-merge';
 
-            async function removeLabel() {
-              try {
-                await github.rest.issues.removeLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: pullNumber,
-                  name: labelName,
-                });
-                console.log(`Label '${labelName}' removed from PR #${pullNumber}.`);
-              } catch (error) {
-                console.error(`Failed to remove label: ${error.message}`);
-              }
-            }
-
-            console.log(`Fetching collaborators for repo...`);
+            console.log(`[Checks] Fetching collaborators...`);
             const { data: collaborators } = await github.rest.repos.listCollaborators({
               owner: context.repo.owner,
               repo: context.repo.repo,
             });
 
+            // Проверяем, имеет ли автор PR права push или admin
             const allowedUsers = collaborators
               .filter(user => user.permissions.push || user.permissions.admin)
               .map(user => user.login);
 
             if (!allowedUsers.includes(prUser)) {
-              core.setFailed(`User ${prUser} is not authorized to auto-merge.`);
-              await removeLabel();
+              core.setFailed(`User @${prUser} is not authorized to auto-merge.`);
               return;
             }
 
-            console.log(`Checking CI/CD status for PR #${pullNumber}...`);
+            console.log(`[Checks] Checking CI/CD status for PR #${pullNumber}...`);
+
+            // Подставьте свои нужные проверки
+            const requiredChecks = ['build', 'test'];
 
             const { data: checks } = await github.rest.checks.listForRef({
               owner: context.repo.owner,
@@ -75,33 +57,27 @@ jobs:
               ref: context.payload.pull_request.head.sha,
             });
 
-            const requiredChecks = ['build', 'test'];
-
-            const relevantCheckRuns = checks.check_runs.filter(check => 
+            const relevantCheckRuns = checks.check_runs.filter(check =>
               requiredChecks.includes(check.name)
             );
 
-            const failedRequiredCheck = relevantCheckRuns.some(check => 
+            const failedRequiredCheck = relevantCheckRuns.some(check =>
               check.conclusion === 'failure'
             );
-
             if (failedRequiredCheck) {
               core.setFailed("Some required checks have failed. Merge is blocked.");
-              await removeLabel();
               return;
             }
 
-            const notCompleted = relevantCheckRuns.some(check =>
+            const notCompletedCheck = relevantCheckRuns.some(check =>
               check.status !== 'completed'
             );
-            
-            if (notCompleted) {
+            if (notCompletedCheck) {
               core.setFailed("Some required checks are still running. Please wait.");
-              await removeLabel();
               return;
             }
 
-            console.log(`Checking merge conflicts for PR #${pullNumber}...`);
+            console.log(`[Checks] Checking mergeability for PR #${pullNumber}...`);
 
             const { data: pr } = await github.rest.pulls.get({
               owner: context.repo.owner,
@@ -110,31 +86,80 @@ jobs:
             });
 
             if (!pr.mergeable) {
-              core.setFailed(`GitHub says PR #${pullNumber} is not mergeable. Possible conflicts?`);
-              await removeLabel();
+              core.setFailed(`PR #${pullNumber} is not mergeable (GitHub reports 'mergeable=false').`);
               return;
             }
-            
             if (pr.mergeable_state === "dirty") {
               core.setFailed(`Merge conflict detected! PR #${pullNumber} requires manual resolution.`);
-              await removeLabel();
               return;
             }
 
-            console.log(`Merging PR #${pullNumber} into main via merge commit...`);
+            console.log(`[Checks] All checks passed for PR #${pullNumber}. Ready to rebase and merge!`);
+
+      - name: Automatic Rebase
+        if: steps.security-checks.outcome == 'success'
+        uses: cirrus-actions/rebase@1.8
+        with:
+          autosquash: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Merge PR
+        if: steps.security-checks.outcome == 'success' && success()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const pullNumber = context.payload.pull_request.number;
+            console.log(`[Merge] Merging PR #${pullNumber}...`);
 
             const response = await github.rest.pulls.merge({
               owner: context.repo.owner,
               repo: context.repo.repo,
               pull_number: pullNumber,
-              merge_method: 'merge', 
+              merge_method: 'merge'
             });
 
             if (response.status !== 200) {
               core.setFailed(`Merge failed: ${response.status} - ${response.data.message}`);
-              await removeLabel();
             } else {
-              console.log(`PR #${pullNumber} merged successfully!`);
+              console.log(`[Merge] PR #${pullNumber} merged successfully!`);
             }
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cleanup / Final Comment
+        if: ${{ always() }}
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const pullNumber = context.payload.pull_request.number;
+            const labelName = 'rebase-and-merge';
+            const jobStatus = '${{ job.status }}'; // success или failure
+
+            console.log(`[Cleanup] Job finished with status = ${jobStatus}`);
+
+            if (jobStatus === 'success') {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullNumber,
+                body: `✅ **GitHub Actions Bot**: Successfully rebased and merged PR #${pullNumber}! 🎉`
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullNumber,
+                body: `⚠️ **GitHub Actions Bot**: Automatic rebase and merge **failed** for PR #${pullNumber}. Please check the logs for details.`
+              });
+
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullNumber,
+                  name: labelName,
+                });
+                console.log(`[Cleanup] Label '${labelName}' removed from PR #${pullNumber}.`);
+              } catch (err) {
+                console.error(`[Cleanup] Failed to remove label: ${err.message}`);
+              }
+            }
