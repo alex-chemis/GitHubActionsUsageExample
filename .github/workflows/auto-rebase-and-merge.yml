@@ -1,39 +1,62 @@
-name: Automatic Rebase and Merge
+name: Auto Rebase and Merge
 
 on:
   issue_comment:
     types: [created]
 
+permissions:
+  pull-requests: write
+  contents: write
+
 jobs:
   rebase-and-merge:
-    name: Rebase and Merge
-    runs-on: ubuntu-latest
-    # Выполняем job, если комментарий оставлен в PR и содержит команду `/rebase-merge`
+    name: Rebase and Merge PR
     if: >
       github.event.issue.pull_request != '' &&
-      contains(github.event.comment.body, '/rebase-merge')
+      (
+        contains(github.event.comment.body, '/rebase') ||
+        contains(github.event.comment.body, '/autosquash')
+      )
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout the PR branch
+      - name: Checkout repository
         uses: actions/checkout@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0  # нужен полный клон для успешного ребейза/пуша
+          fetch-depth: 0  # нужно, чтобы история коммитов была полной
 
-      - name: Rebase PR branch onto main
-        uses: cirrus-actions/rebase@1.8
+      - name: Automatic Rebase
+        uses: cirrus-actions/rebase@v1.8
         with:
-          base: main  # указываем, что хотим ребейзить на main (можно изменить на нужную ветку)
-          # Если хотите автоматически выполнить autosquash, можно добавить параметр autosquash:
-          # autosquash: ${{ contains(github.event.comment.body, '/autosquash') || contains(github.event.comment.body, '/rebase-autosquash') }}
+          # Если комментарий содержит /autosquash или /rebase-autosquash — включаем автосквош
+          autosquash: ${{ contains(github.event.comment.body, '/autosquash') || contains(github.event.comment.body, '/rebase-autosquash') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Merge Pull Request with merge commit
-        uses: peter-evans/merge-pull-request@v2
+      - name: Create merge commit
+        # Используем GitHub REST API через actions/github-script
+        uses: actions/github-script@v6
         with:
-          pull_request: ${{ github.event.issue.number }}
-          merge_method: merge  # выбираем обычное слияние с созданием merge commit
-          commit_title: "Merge PR #${{ github.event.issue.number }}: ${{ github.event.issue.title }}"
-          commit_message: "Автоматически выполнен merge после ребейза на main."
+          script: |
+            const pullNumber = context.issue.number;
+
+            console.log(`Merging PR #${pullNumber} into main via merge commit...`);
+
+            // Вызываем GitHub API для мерджа Pull Request
+            const response = await github.rest.pulls.merge({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pullNumber,
+              merge_method: 'merge', 
+              // Можно указать заголовок и сообщение, если нужно:
+              // commit_title: 'Your custom merge commit title',
+              // commit_message: 'More details about changes...',
+            });
+
+            if (response.status !== 200) {
+              core.setFailed(`Merge failed: ${response.status} - ${response.data.message}`);
+            } else {
+              console.log(`PR #${pullNumber} merged successfully!`);
+            }
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
