@@ -1,8 +1,8 @@
 name: Auto Rebase and Merge
 
 on:
-  issue_comment:
-    types: [created]
+  pull_request:
+    types: [labeled]
 
 permissions:
   pull-requests: write
@@ -11,46 +11,35 @@ permissions:
 jobs:
   rebase-and-merge:
     name: Rebase and Merge PR
-    if: >
-      github.event.issue.pull_request != '' &&
-      (
-        contains(github.event.comment.body, '/rebase') ||
-        contains(github.event.comment.body, '/autosquash')
-      )
+    if: github.event.label.name == 'rebase-and-merge'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0  # нужно, чтобы история коммитов была полной
+          fetch-depth: 0
 
       - name: Automatic Rebase
         uses: cirrus-actions/rebase@1.8
         with:
-          # Если комментарий содержит /autosquash или /rebase-autosquash — включаем автосквош
-          autosquash: ${{ contains(github.event.comment.body, '/autosquash') || contains(github.event.comment.body, '/rebase-autosquash') }}
+          autosquash: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create merge commit
-        # Используем GitHub REST API через actions/github-script
         uses: actions/github-script@v6
         with:
           script: |
-            const pullNumber = context.issue.number;
+            const pullNumber = context.payload.pull_request.number;
 
             console.log(`Merging PR #${pullNumber} into main via merge commit...`);
 
-            // Вызываем GitHub API для мерджа Pull Request
             const response = await github.rest.pulls.merge({
               owner: context.repo.owner,
               repo: context.repo.repo,
               pull_number: pullNumber,
               merge_method: 'merge', 
-              // Можно указать заголовок и сообщение, если нужно:
-              // commit_title: 'Your custom merge commit title',
-              // commit_message: 'More details about changes...',
             });
 
             if (response.status !== 200) {
