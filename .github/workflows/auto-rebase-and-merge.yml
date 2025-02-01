@@ -72,64 +72,55 @@ jobs:
             const notCompletedCheck = relevantCheckRuns.some(check =>
               check.status !== 'completed'
             );
+            
             if (notCompletedCheck) {
               core.setFailed("Some required checks are still running. Please wait.");
               return;
             }
 
-            console.log(`[Checks] Checking mergeability for PR #${pullNumber}...`);
-
-            const { data: pr } = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: pullNumber
-            });
-
-            if (!pr.mergeable) {
-              core.setFailed(`PR #${pullNumber} is not mergeable (GitHub reports 'mergeable=false').`);
-              return;
-            }
-            if (pr.mergeable_state === "dirty") {
-              core.setFailed(`Merge conflict detected! PR #${pullNumber} requires manual resolution.`);
-              return;
-            }
-
             console.log(`[Checks] All checks passed for PR #${pullNumber}. Ready to rebase and merge!`);
 
-      - name: Automatic Rebase
-        if: steps.security-checks.outcome == 'success'
+      - name: Automatic Rebase and Push
         uses: cirrus-actions/rebase@1.8
         with:
           autosquash: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push Rebased Changes
-        if: steps.security-checks.outcome == 'success'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git push origin HEAD:${{ github.event.pull_request.head.ref }} --force
-
-      - name: Merge PR
-        if: steps.security-checks.outcome == 'success' && success()
+      - name: Check Mergeability After Rebase
+        id: merge-check
         uses: actions/github-script@v6
         with:
           script: |
-            const pullNumber = context.payload.pull_request.number;
-            console.log(`[Merge] Merging PR #${pullNumber}...`);
+            const prNumber = context.payload.pull_request.number;
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+            if (!pr.mergeable || pr.mergeable_state === "dirty") {
+              core.setFailed(`PR #${prNumber} is not mergeable after rebase.`);
+            } else {
+              core.info(`PR #${prNumber} is mergeable.`);
+            }
 
+      - name: Merge PR
+        if: steps.merge-check.outcome == 'success'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const prNumber = context.payload.pull_request.number;
+            core.info(`Merging PR #${prNumber}...`);
             const response = await github.rest.pulls.merge({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: pullNumber,
+              pull_number: prNumber,
               merge_method: 'merge'
             });
-
             if (response.status !== 200) {
-              core.setFailed(`Merge failed: ${response.status} - ${response.data.message}`);
+              core.setFailed(`Merge failed for PR #${prNumber}: ${response.data.message}`);
             } else {
-              console.log(`[Merge] PR #${pullNumber} merged successfully!`);
+              core.info(`PR #${prNumber} merged successfully.`);
             }
 
       - name: Cleanup / Final Comment
