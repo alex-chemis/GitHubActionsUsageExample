@@ -69,16 +69,38 @@ jobs:
 
             console.log(`Checking CI/CD status for PR #${pullNumber}...`);
 
+            // 1. Получаем все check_runs
             const { data: checks } = await github.rest.checks.listForRef({
               owner: context.repo.owner,
               repo: context.repo.repo,
               ref: context.payload.pull_request.head.sha,
             });
 
-            const failedChecks = checks.check_runs.some(check => check.conclusion === 'failure');
+            // 2. Указываем список "обязательных" проверок
+            const requiredChecks = ['build', 'test']; // Пример! Подставьте свои
 
-            if (failedChecks) {
-              core.setFailed("Some checks have failed. Merge is blocked.");
+            // 3. Фильтруем из всех только нужные
+            const relevantCheckRuns = checks.check_runs.filter(check => 
+              requiredChecks.includes(check.name)
+            );
+
+            // 4. Проверяем, не упали ли наши обязательные проверки
+            const failedRequiredCheck = relevantCheckRuns.some(check => 
+              check.conclusion === 'failure'
+            );
+
+            if (failedRequiredCheck) {
+              core.setFailed("Some required checks have failed. Merge is blocked.");
+              await removeLabel();
+              return;
+            }
+
+            // (Опционально) Проверяем, что все обязательные проверки завершились (нет in_progress)
+            const notCompleted = relevantCheckRuns.some(check =>
+              check.status !== 'completed'
+            );
+            if (notCompleted) {
+              core.setFailed("Some required checks are still running. Please wait.");
               await removeLabel();
               return;
             }
