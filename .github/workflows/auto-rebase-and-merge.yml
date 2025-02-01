@@ -87,19 +87,35 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Check Mergeability After Rebase
+      - name: Wait for Updated Mergeable Status
         id: merge-check
         uses: actions/github-script@v6
         with:
           script: |
             const prNumber = context.payload.pull_request.number;
-            const { data: pr } = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: prNumber,
-            });
+            const maxAttempts = 5;
+            const delayMs = 3000;
+            let attempt = 0;
+            let pr;
+            while (attempt < maxAttempts) {
+              pr = (await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber,
+              })).data;
+
+              core.info(`Attempt ${attempt + 1}: mergeable=${pr.mergeable}, mergeable_state=${pr.mergeable_state}`);
+
+              // Если mergeable уже вычислено (не null) — выходим из цикла
+              if (pr.mergeable !== null) break;
+
+              // Ждем перед следующей попыткой
+              await new Promise(resolve => setTimeout(resolve, delayMs));
+              attempt++;
+            }
+
             if (!pr.mergeable || pr.mergeable_state === "dirty") {
-              core.setFailed(`PR #${prNumber} is not mergeable after rebase.`);
+              core.setFailed(`PR #${prNumber} is not mergeable after rebase: mergeable=${pr.mergeable}, mergeable_state=${pr.mergeable_state}`);
             } else {
               core.info(`PR #${prNumber} is mergeable.`);
             }
