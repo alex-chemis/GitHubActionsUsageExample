@@ -21,13 +21,15 @@ jobs:
         with:
           token: ${{ secrets.PAT_TOKEN }}
           fetch-depth: 0
+        env:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Automatic Rebase
         uses: cirrus-actions/rebase@1.8
         with:
           autosquash: false
         env:
-          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create merge commit with security checks
         uses: actions/github-script@v6
