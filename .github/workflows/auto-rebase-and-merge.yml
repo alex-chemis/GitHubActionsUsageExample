@@ -1,0 +1,39 @@
+name: Automatic Rebase and Merge
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  rebase-and-merge:
+    name: Rebase and Merge
+    runs-on: ubuntu-latest
+    # Выполняем job, если комментарий оставлен в PR и содержит команду `/rebase-merge`
+    if: >
+      github.event.issue.pull_request != '' &&
+      contains(github.event.comment.body, '/rebase-merge')
+    steps:
+      - name: Checkout the PR branch
+        uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0  # нужен полный клон для успешного ребейза/пуша
+
+      - name: Rebase PR branch onto main
+        uses: cirrus-actions/rebase@1.8
+        with:
+          base: main  # указываем, что хотим ребейзить на main (можно изменить на нужную ветку)
+          # Если хотите автоматически выполнить autosquash, можно добавить параметр autosquash:
+          # autosquash: ${{ contains(github.event.comment.body, '/autosquash') || contains(github.event.comment.body, '/rebase-autosquash') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Merge Pull Request with merge commit
+        uses: peter-evans/merge-pull-request@v2
+        with:
+          pull_request: ${{ github.event.issue.number }}
+          merge_method: merge  # выбираем обычное слияние с созданием merge commit
+          commit_title: "Merge PR #${{ github.event.issue.number }}: ${{ github.event.issue.title }}"
+          commit_message: "Автоматически выполнен merge после ребейза на main."
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
